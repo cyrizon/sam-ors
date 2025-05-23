@@ -14,6 +14,7 @@ elevation_cache/
 cgiar_cache/
 node_modules/
 data/pbf/
+data/csv/
 # jqwik
 .jqwik-database
 

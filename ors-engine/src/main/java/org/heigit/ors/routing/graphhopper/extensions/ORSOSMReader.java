@@ -14,6 +14,9 @@
 package org.heigit.ors.routing.graphhopper.extensions;
 
 import com.carrotsearch.hppc.LongArrayList;
+import com.carrotsearch.hppc.LongHashSet;
+import com.carrotsearch.hppc.cursors.LongCursor;
+import com.graphhopper.coll.LongIntMap;
 import com.graphhopper.reader.ReaderNode;
 import com.graphhopper.reader.ReaderWay;
 import com.graphhopper.reader.osm.OSMReader;
@@ -26,7 +29,7 @@ import org.heigit.ors.routing.graphhopper.extensions.reader.osmfeatureprocessors
 import org.heigit.ors.routing.graphhopper.extensions.storages.builders.*;
 import org.locationtech.jts.geom.Coordinate;
 
-import java.io.InvalidObjectException;
+import java.io.*;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -50,6 +53,16 @@ public class ORSOSMReader extends OSMReader {
     private final List<OSMFeatureFilter> filtersToApply = new ArrayList<>();
 
     private final HashSet<String> extraTagKeys;
+
+    /* -------------------------------
+    * New code for SAM project
+    * -------------------------------*/
+    private boolean osmToGhMapSaved = false;
+    private final HashMap<Long, Integer> osmToGh = new HashMap<>();
+    private final LongHashSet allOsmNodeIds = new LongHashSet();
+    /* -------------------------------
+    * End of new code for SAM project
+    * -------------------------------*/
 
     public ORSOSMReader(GraphHopperStorage storage, GraphProcessContext procCntx) {
         super(storage);
@@ -120,6 +133,7 @@ public class ORSOSMReader extends OSMReader {
                 nodeTags.put(node.getId(), tagValues);
             }
         }
+
         return node;
     }
 
@@ -166,6 +180,13 @@ public class ORSOSMReader extends OSMReader {
      */
     @Override
     public void onProcessWay(ReaderWay way) {
+        /* -------------------------------
+         * Edited for SAM project
+         * -------------------------------*/
+        LongArrayList osmNodeIds = way.getNodes();
+        for (int i = 0; i < osmNodeIds.size(); i++) {
+            allOsmNodeIds.add(osmNodeIds.get(i));
+        }
 
         Map<Integer, Map<String, String>> tags = new HashMap<>();
         ArrayList<Coordinate> coords = new ArrayList<>();
@@ -176,7 +197,6 @@ public class ORSOSMReader extends OSMReader {
             // should store the internal node id though rather than the osm node as during the edge processing, we
             // do not know the osm node id
 
-            LongArrayList osmNodeIds = way.getNodes();
             int size = osmNodeIds.size();
 
             for (int i = 0; i < size; i++) {
@@ -197,24 +217,24 @@ public class ORSOSMReader extends OSMReader {
             // This is slower so should only be done when needed
 
             // First we need to generate the geometry
-            LongArrayList osmNodeIds = new LongArrayList();
+            LongArrayList osmNodeIdsSubset = new LongArrayList();
             LongArrayList allOsmNodes = way.getNodes();
 
             if (allOsmNodes.size() > 1) {
                 if (processSimpleGeom) {
                     // We only want the start and end nodes
-                    osmNodeIds.add(allOsmNodes.get(0));
-                    osmNodeIds.add(allOsmNodes.get(allOsmNodes.size() - 1));
+                    osmNodeIdsSubset.add(allOsmNodes.get(0));
+                    osmNodeIdsSubset.add(allOsmNodes.get(allOsmNodes.size() - 1));
                 } else {
                     // Process all nodes
-                    osmNodeIds = allOsmNodes;
+                    osmNodeIdsSubset = allOsmNodes;
                 }
             }
 
-            if (osmNodeIds.size() > 1) {
+            if (osmNodeIdsSubset.size() > 1) {
 
-                for (int i = 0; i < osmNodeIds.size(); i++) {
-                    int id = getNodeMap().get(osmNodeIds.get(i));
+                for (int i = 0; i < osmNodeIdsSubset.size(); i++) {
+                    int id = getNodeMap().get(osmNodeIdsSubset.get(i));
                     try {
                         double lat = getLatitudeOfNode(id, false);
                         double lon = getLongitudeOfNode(id, false);
@@ -230,7 +250,7 @@ public class ORSOSMReader extends OSMReader {
                             coords.add(new Coordinate(lon, lat));
                         }
                     } catch (Exception e) {
-                        LOGGER.error("Could not process node " + osmNodeIds.get(i));
+                        LOGGER.error("Could not process node " + osmNodeIdsSubset.get(i));
                     }
                 }
             }
@@ -243,6 +263,9 @@ public class ORSOSMReader extends OSMReader {
         } else {
             procCntx.processWay(way);
         }
+        /* -------------------------------
+         * End of edited code for SAM project
+         * -------------------------------*/
     }
 
     /* The following two methods are not ideal, but due to a preprocessing stage of GH they are required if you want
@@ -394,6 +417,13 @@ public class ORSOSMReader extends OSMReader {
 
     @Override
     protected void finishedReading() {
+        /* -------------------------------
+        * New code for SAM project
+        * -------------------------------*/
+        saveOsmToGhNodeIdMapIfNeeded();
+        /* -------------------------------
+        * End of new code for SAM project
+        * -------------------------------*/
         super.finishedReading();
         procCntx.finish();
     }
@@ -413,4 +443,35 @@ public class ORSOSMReader extends OSMReader {
         }
         return super.getElevation(node);
     }
+
+    /* -------------------------------
+    * New code for SAM project
+    * -------------------------------*/
+    private void saveOsmToGhNodeIdMapIfNeeded() {
+        if (osmToGhMapSaved) return;
+        LongIntMap nodeMap = getNodeMap();
+        if (nodeMap == null) {
+            LOGGER.error("getNodeMap() returned null: cannot save OSM→GH node mapping.");
+            return;
+        }
+        try (ObjectOutputStream oos = new ObjectOutputStream(
+                new FileOutputStream("data/csv/edges/osm_to_gh_nodeid.map"))) {
+            HashMap<Long, Integer> mapping = new HashMap<>();
+            for (LongCursor cursor : allOsmNodeIds) {
+                long osmId = cursor.value;
+                int ghId = nodeMap.get(osmId);
+                if (ghId >= 0) {
+                    mapping.put(osmId, ghId);
+                }
+            }
+            oos.writeObject(mapping);
+            LOGGER.info("OSM→GH node mapping saved: " + mapping.size() + " entries.");
+            osmToGhMapSaved = true;
+        } catch (Exception e) {
+            LOGGER.error("Failed to save OSM→GH node mapping: " + e.getMessage());
+        }
+    }
+    /* -------------------------------
+    * End of new code for SAM project
+    * -------------------------------*/
 }

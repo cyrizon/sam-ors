@@ -334,6 +334,20 @@ public class ORSGraphHopper extends GraphHopperGtfs {
      */
     @Override
     protected void postProcessing(boolean closeEarly) {
+        // -------------------------------
+        // New code for SAM project
+        // -------------------------------
+        // Charger le mapping OSM → GH node ID
+        HashMap<Long, Integer> osmToGh = VirtualEdgeInjector.loadOsmToGhNodeIdMap("data/csv/edges/osm_to_gh_nodeid.map");
+
+        // Injection des arêtes virtuelles
+        // (le graphe n'est pas encore gelé ici)
+        System.out.println("Graph frozen? " + getGraphHopperStorage().isFrozen());
+        VirtualEdgeInjector.inject(getGraphHopperStorage(), "data/csv/edges/gh_virtual_edges.csv", osmToGh);
+        // -------------------------------
+        // End of new code for SAM project
+        // -------------------------------
+
         super.postProcessing(closeEarly);
 
         //Create the core
